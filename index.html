@@ -94,8 +94,24 @@
         // Firebase initialization
         function initializeFirebase() {
             try {
+                // Вставьте ваш firebaseConfig сюда
+                // Примечание: Убедитесь, что вы скопировали правильный код из вашей консоли Firebase
+                const firebaseConfig = {
+                  apiKey: "AIzaSyBITKeS15ll9IQKd-VCaRhbjeIb15lLs08",
+                  authDomain: "zelenielegkie-3ee38.firebaseapp.com",
+                  projectId: "zelenielegkie-3ee38",
+                  storageBucket: "zelenielegkie-3ee38.firebasestorage.app",
+                  messagingSenderId: "282292606383",
+                  appId: "1:282292606383:web:a8b50a9e8753496e968b5a",
+                  measurementId: "G-C9Q8Q9DMZS"
+                };
+
                 if (app) return; // Prevent re-initialization
-                app = initializeApp(firebaseConfig);
+
+                // Use environment variables if they exist, otherwise use local config
+                const configToUse = (typeof __firebase_config !== 'undefined' && __firebase_config) ? firebaseConfig : localFirebaseConfig;
+                
+                app = initializeApp(configToUse);
                 auth = getAuth(app);
                 db = getFirestore(app);
                 storage = getStorage(app);
