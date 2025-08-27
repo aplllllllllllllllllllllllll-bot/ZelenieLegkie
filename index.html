@@ -1,0 +1,583 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Итоги Арт-лаборатории</title>
+    <!-- Tailwind CSS CDN для стилизации -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f7f7f9;
+        }
+        #map {
+            height: 500px;
+            width: 100%;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+        .project-card {
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+        .project-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 8px 12px rgba(0, 0, 0, 0.15);
+        }
+        .loading-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(255, 255, 255, 0.8);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            flex-direction: column;
+            border-radius: 12px;
+            z-index: 1000;
+        }
+        .spinner {
+            border: 4px solid rgba(0, 0, 0, 0.1);
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            border-left-color: #000;
+            animation: spin 1s ease infinite;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+    <!-- Leaflet.js для карты -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.7.1/dist/leaflet.css" xintegrity="sha512-xodx3+a7E5zQ+gL8e7h2wA3m8g2V8X3WwE8G6i0k8H2j7p2wB9d4c7F5t3D5s6s7d" crossorigin="" />
+    <script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js" xintegrity="sha512-xodx3+a7E5zQ+gL8e7h2wA3m8g2V8X3WwE8G6i0k8H2j7p2wB9d4c7F5t3D5s6s7d" crossorigin=""></script>
+    <!-- Libraries to handle geojson -->
+    <script src="https://unpkg.com/togeojson@0.16.0/togeojson.js"></script>
+    <!-- Firebase SDK -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, getDoc, addDoc, setDoc, updateDoc, deleteDoc, onSnapshot, collection, query } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { getStorage, ref, uploadBytes, getDownloadURL, deleteObject } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-storage.js";
+
+        // Глобальные переменные для доступа к Firebase
+        let app;
+        let auth;
+        let db;
+        let storage;
+        let userId;
+        let mymap;
+        let geoJsonLayers = {}; // Хранение слоев GeoJSON для карты
+        let projects = {}; // Кэш проектов
+
+        // Устанавливаем пути к коллекциям и хранилищу
+        let publicCollectionPath;
+        let privateCollectionPath;
+
+        // Определяем переменные из среды, если они доступны
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : { /* Your default config here if needed for local testing */ };
+        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
+        // Инициализация Firebase
+        function initializeFirebase() {
+            try {
+                if (app) return; // Предотвращение повторной инициализации
+                app = initializeApp(firebaseConfig);
+                auth = getAuth(app);
+                db = getFirestore(app);
+                storage = getStorage(app);
+                console.log("Firebase initialized.");
+
+                // Обработчик состояния аутентификации
+                onAuthStateChanged(auth, async (user) => {
+                    if (user) {
+                        userId = user.uid;
+                        console.log("User authenticated:", userId);
+                        publicCollectionPath = `artifacts/${appId}/public/data/projects`;
+                        privateCollectionPath = `artifacts/${appId}/users/${userId}/private-projects`;
+                        // Запускаем слушателей данных только после аутентификации
+                        startDataListeners();
+                        document.getElementById('admin-id-display').textContent = `Ваш ID: ${userId}`;
+                        document.getElementById('app-id-display').textContent = `ID приложения: ${appId}`;
+                    } else {
+                        // Если токена нет, входим анонимно
+                        await signInAnonymously(auth);
+                        console.log("Signed in anonymously.");
+                    }
+                });
+
+                // Если есть токен, входим с ним
+                if (initialAuthToken) {
+                    signInWithCustomToken(auth, initialAuthToken).catch(error => {
+                        console.error("Custom token sign-in failed:", error);
+                        signInAnonymously(auth);
+                    });
+                } else {
+                     signInAnonymously(auth);
+                }
+            } catch (error) {
+                console.error("Firebase initialization failed:", error);
+                document.getElementById('loading-state').innerHTML = `<p class="text-red-500 font-bold">Ошибка инициализации. Пожалуйста, проверьте консоль.</p>`;
+            }
+        }
+
+        // Запуск слушателей данных Firestore
+        function startDataListeners() {
+            if (!userId) {
+                console.error("No user ID. Cannot start data listeners.");
+                return;
+            }
+
+            // Слушаем изменения в публичной коллекции для отображения
+            const qPublic = query(collection(db, publicCollectionPath));
+            onSnapshot(qPublic, (querySnapshot) => {
+                const projectsList = {};
+                querySnapshot.forEach((doc) => {
+                    projectsList[doc.id] = { id: doc.id, ...doc.data() };
+                });
+                projects = projectsList;
+                renderProjects(projects);
+                renderMap(projects);
+            }, (error) => {
+                console.error("Ошибка при получении публичных проектов:", error);
+            });
+
+            // Слушаем изменения в личной коллекции админа
+            const qPrivate = query(collection(db, privateCollectionPath));
+            onSnapshot(qPrivate, (querySnapshot) => {
+                const myProjectsList = {};
+                querySnapshot.forEach((doc) => {
+                    myProjectsList[doc.id] = { id: doc.id, ...doc.data() };
+                });
+                renderMyProjectsList(myProjectsList);
+            }, (error) => {
+                console.error("Ошибка при получении моих проектов:", error);
+            });
+        }
+
+        // Рендеринг списка проектов на главной странице
+        function renderProjects(projects) {
+            const container = document.getElementById('projects-container');
+            container.innerHTML = '';
+            if (Object.keys(projects).length === 0) {
+                container.innerHTML = '<p class="text-center text-gray-500">Пока нет добавленных проектов.</p>';
+                document.getElementById('loading-state').style.display = 'none';
+                return;
+            }
+            Object.values(projects).forEach(project => {
+                const projectHtml = `
+                    <div id="project-card-${project.id}" class="project-card bg-white p-6 rounded-xl shadow-lg border border-gray-200">
+                        <h3 class="text-xl font-semibold text-gray-800">${project.title || 'Без названия'}</h3>
+                        <p class="mt-2 text-gray-600">${project.description || 'Описание отсутствует.'}</p>
+                        ${project.links ? `<div class="mt-3">
+                            <span class="font-medium text-gray-700">Ссылки:</span>
+                            <ul class="list-disc list-inside mt-1 space-y-1 text-sm text-blue-500">
+                                ${project.links.split('\n').map(link => `<li><a href="${link.trim()}" target="_blank" class="hover:underline">${link.trim()}</a></li>`).join('')}
+                            </ul>
+                        </div>` : ''}
+                        ${project.media && project.media.length > 0 ? `<div class="mt-4 grid grid-cols-2 sm:grid-cols-3 gap-4">
+                            ${project.media.map(media => {
+                                if (media.type.startsWith('image')) {
+                                    return `<img src="${media.url}" alt="${project.title}" class="rounded-lg object-cover w-full h-full">`;
+                                } else if (media.type.startsWith('video')) {
+                                    return `<video controls src="${media.url}" class="rounded-lg w-full h-full"></video>`;
+                                } else if (media.type.startsWith('audio')) {
+                                    return `<audio controls src="${media.url}" class="w-full"></audio>`;
+                                }
+                                return '';
+                            }).join('')}
+                        </div>` : ''}
+                    </div>
+                `;
+                container.innerHTML += projectHtml;
+            });
+            document.getElementById('loading-state').style.display = 'none';
+        }
+
+        // Рендеринг карты Leaflet
+        function renderMap(projects) {
+            // Очищаем старые слои
+            for (const key in geoJsonLayers) {
+                if (mymap.hasLayer(geoJsonLayers[key])) {
+                    mymap.removeLayer(geoJsonLayers[key]);
+                }
+            }
+            geoJsonLayers = {};
+
+            const mapContainer = document.getElementById('map');
+            if (!mymap && mapContainer) {
+                mymap = L.map(mapContainer).setView([55.7558, 37.6176], 12); // Центр Москвы
+                L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+                }).addTo(mymap);
+            }
+            if (!mymap) return;
+            
+            Object.values(projects).forEach(project => {
+                if (project.geoJson) {
+                    try {
+                        const geoJsonData = typeof project.geoJson === 'string' ? JSON.parse(project.geoJson) : project.geoJson;
+                        const geoLayer = L.geoJSON(geoJsonData, {
+                            style: function (feature) {
+                                // Пример стиля для линий и полигонов
+                                return { color: '#ef4444', weight: 3, opacity: 0.65 };
+                            },
+                            pointToLayer: function (feature, latlng) {
+                                // Кастомный маркер для точек
+                                return L.circleMarker(latlng, {
+                                    radius: 8,
+                                    fillColor: "#ef4444",
+                                    color: "#fff",
+                                    weight: 1,
+                                    opacity: 1,
+                                    fillOpacity: 0.8
+                                });
+                            },
+                            onEachFeature: function (feature, layer) {
+                                // Добавляем всплывающее окно
+                                layer.bindPopup(`
+                                    <div class="p-2">
+                                        <h4 class="font-bold text-lg">${project.title || 'Без названия'}</h4>
+                                        <p class="text-sm mt-1">${project.description || 'Описание отсутствует.'}</p>
+                                    </div>
+                                `);
+                            }
+                        }).addTo(mymap);
+                        geoJsonLayers[project.id] = geoLayer;
+                    } catch (e) {
+                        console.error("Ошибка при парсинге GeoJSON для проекта:", project.id, e);
+                    }
+                }
+            });
+        }
+
+        // Рендеринг списка проектов в админке
+        function renderMyProjectsList(myProjects) {
+            const container = document.getElementById('my-projects-list');
+            container.innerHTML = '';
+            if (Object.keys(myProjects).length === 0) {
+                container.innerHTML = '<p class="text-center text-gray-500">У вас пока нет проектов.</p>';
+                return;
+            }
+            Object.values(myProjects).forEach(project => {
+                const projectRow = document.createElement('tr');
+                projectRow.className = 'border-b border-gray-200 hover:bg-gray-50 transition-colors';
+                projectRow.innerHTML = `
+                    <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">${project.title || 'Без названия'}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                        <span class="inline-block bg-green-100 text-green-800 px-2 py-1 text-xs font-semibold rounded-full">${project.public ? 'Опубликован' : 'Черновик'}</span>
+                    </td>
+                    <td class="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                        <button onclick="editProject('${project.id}')" class="text-indigo-600 hover:text-indigo-900 mr-4">Изменить</button>
+                        <button onclick="deleteProject('${project.id}')" class="text-red-600 hover:text-red-900">Удалить</button>
+                    </td>
+                `;
+                container.appendChild(projectRow);
+            });
+        }
+
+        // Заполнение формы для редактирования проекта
+        async function editProject(projectId) {
+            showSection('admin-section');
+            document.getElementById('admin-title').textContent = 'Изменить проект';
+            const docRef = doc(db, privateCollectionPath, projectId);
+            try {
+                const docSnap = await getDoc(docRef);
+                if (docSnap.exists()) {
+                    const data = docSnap.data();
+                    document.getElementById('project-id').value = projectId;
+                    document.getElementById('project-title').value = data.title || '';
+                    document.getElementById('project-description').value = data.description || '';
+                    document.getElementById('project-links').value = data.links || '';
+                    document.getElementById('project-public').checked = data.public || false;
+                }
+            } catch (e) {
+                console.error("Ошибка при получении проекта:", e);
+                showInfoMessage("Ошибка при загрузке проекта. Пожалуйста, попробуйте снова.", "error");
+            }
+        }
+
+        // Удаление проекта
+        async function deleteProject(projectId) {
+            const docRefPrivate = doc(db, privateCollectionPath, projectId);
+            const docRefPublic = doc(db, publicCollectionPath, projectId);
+
+            // Ищем проект в публичной коллекции, чтобы удалить оттуда медиа
+            const docSnap = await getDoc(docRefPublic);
+            if (docSnap.exists() && docSnap.data().media) {
+                const mediaFiles = docSnap.data().media;
+                // Удаляем медиафайлы из Firebase Storage
+                for (const media of mediaFiles) {
+                    try {
+                        const fileRef = ref(storage, media.url);
+                        await deleteObject(fileRef);
+                        console.log(`Успешно удален файл: ${media.url}`);
+                    } catch (e) {
+                        console.error(`Ошибка при удалении файла ${media.url}:`, e);
+                    }
+                }
+            }
+            // Удаляем проект из обеих коллекций
+            try {
+                await deleteDoc(docRefPrivate);
+                await deleteDoc(docRefPublic);
+                showInfoMessage("Проект успешно удален.");
+            } catch (e) {
+                console.error("Ошибка при удалении проекта:", e);
+                showInfoMessage("Ошибка при удалении проекта. Пожалуйста, попробуйте снова.", "error");
+            }
+        }
+
+        // Сохранение/обновление проекта
+        async function saveProject(event) {
+            event.preventDefault();
+            const form = event.target;
+            const projectId = document.getElementById('project-id').value;
+            const title = form['project-title'].value;
+            const description = form['project-description'].value;
+            const links = form['project-links'].value;
+            const isPublic = form['project-public'].checked;
+            const geoJsonFile = form['geojson-file'].files[0];
+            const mediaFiles = form['media-files'].files;
+
+            if (!title) {
+                showInfoMessage("Пожалуйста, введите название проекта.", "error");
+                return;
+            }
+
+            document.getElementById('save-btn').disabled = true;
+            document.getElementById('loading-state-admin').style.display = 'flex';
+            showInfoMessage("Сохранение проекта...", "info");
+
+            let geoJsonContent = '';
+            let uploadedMedia = [];
+
+            try {
+                // Обработка GeoJSON файла
+                if (geoJsonFile) {
+                    const fileText = await geoJsonFile.text();
+                    // Проверяем, что файл действительно GeoJSON
+                    JSON.parse(fileText);
+                    geoJsonContent = fileText;
+                }
+
+                // Загрузка медиафайлов в Firebase Storage
+                for (const file of mediaFiles) {
+                    const storageRef = ref(storage, `${appId}/media/${crypto.randomUUID()}-${file.name}`);
+                    const uploadTask = await uploadBytes(storageRef, file);
+                    const downloadURL = await getDownloadURL(uploadTask.ref);
+                    uploadedMedia.push({ url: downloadURL, type: file.type });
+                }
+
+                const projectData = {
+                    title,
+                    description,
+                    links,
+                    public: isPublic,
+                    geoJson: geoJsonContent || null,
+                    media: uploadedMedia.length > 0 ? uploadedMedia : null
+                };
+
+                const isNewProject = !projectId;
+                if (isNewProject) {
+                    // Создание нового проекта
+                    const privateDocRef = await addDoc(collection(db, privateCollectionPath), projectData);
+                    // Копируем в публичную коллекцию, если он публичный
+                    if (isPublic) {
+                        await setDoc(doc(db, publicCollectionPath, privateDocRef.id), projectData);
+                    }
+                    showInfoMessage("Проект успешно создан!");
+                } else {
+                    // Обновление существующего проекта
+                    const privateDocRef = doc(db, privateCollectionPath, projectId);
+                    await updateDoc(privateDocRef, projectData);
+                    // Обновляем публичную версию
+                    if (isPublic) {
+                        const publicDocRef = doc(db, publicCollectionPath, projectId);
+                        await setDoc(publicDocRef, projectData, { merge: true });
+                    } else {
+                        // Если сняли галочку "Опубликовать", удаляем из публичной
+                        await deleteDoc(doc(db, publicCollectionPath, projectId));
+                    }
+                    showInfoMessage("Проект успешно обновлен!");
+                }
+
+                form.reset();
+                document.getElementById('project-id').value = '';
+                document.getElementById('admin-title').textContent = 'Добавить новый проект';
+            } catch (e) {
+                console.error("Ошибка при сохранении проекта:", e);
+                showInfoMessage(`Ошибка при сохранении: ${e.message}`, "error");
+            } finally {
+                document.getElementById('save-btn').disabled = false;
+                document.getElementById('loading-state-admin').style.display = 'none';
+            }
+        }
+
+        // Управление отображением разделов
+        function showSection(sectionId) {
+            document.getElementById('main-section').classList.add('hidden');
+            document.getElementById('admin-section').classList.add('hidden');
+            document.getElementById(sectionId).classList.remove('hidden');
+            if (sectionId === 'main-section') {
+                 document.getElementById('app-title').classList.remove('hidden');
+            } else {
+                 document.getElementById('app-title').classList.add('hidden');
+            }
+        }
+
+        // Управление всплывающими сообщениями
+        function showInfoMessage(message, type = "success") {
+            const messageBox = document.getElementById('info-message-box');
+            messageBox.textContent = message;
+            messageBox.className = `p-4 rounded-xl text-center font-medium my-4 ${
+                type === 'success' ? 'bg-green-100 text-green-800' :
+                type === 'error' ? 'bg-red-100 text-red-800' :
+                'bg-blue-100 text-blue-800'
+            }`;
+            messageBox.classList.remove('hidden');
+            setTimeout(() => {
+                messageBox.classList.add('hidden');
+            }, 5000);
+        }
+
+        // Инициализация при загрузке страницы
+        window.onload = function() {
+            initializeFirebase();
+            showSection('main-section');
+
+            // Навешиваем слушатели событий
+            document.getElementById('admin-toggle-btn').addEventListener('click', () => showSection('admin-section'));
+            document.getElementById('main-toggle-btn').addEventListener('click', () => showSection('main-section'));
+            document.getElementById('project-form').addEventListener('submit', saveProject);
+        };
+    </script>
+</head>
+<body class="bg-gray-50 text-gray-800">
+
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-10">
+
+        <!-- Заголовок и переключатели -->
+        <header class="flex flex-col sm:flex-row justify-between items-center mb-10">
+            <div id="app-title" class="flex-grow text-center sm:text-left">
+                <h1 class="text-4xl sm:text-5xl font-extrabold text-gray-900 leading-tight">Итоги Арт-лаборатории</h1>
+                <p class="mt-2 text-lg sm:text-xl text-gray-600">Интерактивная карта и каталог проектов</p>
+            </div>
+            <div class="flex space-x-4 mt-4 sm:mt-0">
+                <button id="main-toggle-btn" class="py-2 px-6 rounded-full text-white font-medium bg-indigo-600 hover:bg-indigo-700 transition-colors shadow-lg">
+                    Проекты
+                </button>
+                <button id="admin-toggle-btn" class="py-2 px-6 rounded-full text-indigo-700 font-medium bg-indigo-100 hover:bg-indigo-200 transition-colors shadow-lg">
+                    Админка
+                </button>
+            </div>
+        </header>
+
+        <!-- Всплывающее информационное сообщение -->
+        <div id="info-message-box" class="hidden p-4 rounded-xl text-center font-medium my-4" role="alert"></div>
+
+        <!-- Основная страница (видима по умолчанию) -->
+        <main id="main-section" class="space-y-12">
+            <!-- Секция карты -->
+            <section class="relative">
+                <h2 class="text-3xl font-bold mb-6 text-gray-900">Проекты на карте</h2>
+                <div id="map" class="relative">
+                    <div id="loading-state" class="loading-overlay">
+                         <div class="spinner"></div>
+                         <p class="mt-4 text-gray-600">Загрузка проектов...</p>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Секция списка проектов -->
+            <section>
+                <h2 class="text-3xl font-bold mb-6 text-gray-900">Список проектов</h2>
+                <div id="projects-container" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
+                    <!-- Проекты будут загружены сюда -->
+                </div>
+            </section>
+        </main>
+
+        <!-- Админка (скрыта по умолчанию) -->
+        <div id="admin-section" class="hidden">
+            <div class="bg-white p-8 rounded-xl shadow-lg border border-gray-200">
+                <h2 class="text-3xl font-bold text-gray-900 mb-6">Панель администратора</h2>
+                <p class="text-sm text-gray-500 mb-6">
+                    <span id="admin-id-display" class="block font-mono"></span>
+                    <span id="app-id-display" class="block font-mono"></span>
+                </p>
+
+                <!-- Форма добавления/редактирования проекта -->
+                <h3 id="admin-title" class="text-2xl font-semibold text-gray-800 mb-4">Добавить новый проект</h3>
+                <form id="project-form" class="space-y-6">
+                    <input type="hidden" id="project-id" name="project-id">
+
+                    <div>
+                        <label for="project-title" class="block text-sm font-medium text-gray-700">Название проекта</label>
+                        <input type="text" id="project-title" name="project-title" required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500">
+                    </div>
+
+                    <div>
+                        <label for="project-description" class="block text-sm font-medium text-gray-700">Описание</label>
+                        <textarea id="project-description" name="project-description" rows="4" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500"></textarea>
+                    </div>
+
+                    <div>
+                        <label for="project-links" class="block text-sm font-medium text-gray-700">Ссылки (каждая с новой строки)</label>
+                        <textarea id="project-links" name="project-links" rows="2" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500"></textarea>
+                    </div>
+
+                    <div>
+                        <label for="geojson-file" class="block text-sm font-medium text-gray-700">Файл с геоданными (.geojson)</label>
+                        <input type="file" id="geojson-file" name="geojson-file" accept=".geojson, .json" class="mt-1 block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100">
+                    </div>
+
+                    <div>
+                        <label for="media-files" class="block text-sm font-medium text-gray-700">Медиафайлы (изображения, видео, аудио)</label>
+                        <input type="file" id="media-files" name="media-files" multiple accept="image/*,video/*,audio/*" class="mt-1 block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100">
+                    </div>
+
+                    <div class="flex items-center">
+                        <input id="project-public" name="project-public" type="checkbox" class="h-4 w-4 text-indigo-600 border-gray-300 rounded focus:ring-indigo-500">
+                        <label for="project-public" class="ml-2 block text-sm text-gray-900">Опубликовать проект</label>
+                    </div>
+
+                    <div class="relative">
+                        <button type="submit" id="save-btn" class="w-full flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500">
+                            Сохранить проект
+                        </button>
+                        <div id="loading-state-admin" class="loading-overlay" style="display: none;">
+                            <div class="spinner"></div>
+                        </div>
+                    </div>
+                </form>
+
+                <!-- Список моих проектов -->
+                <div class="mt-10">
+                    <h3 class="text-2xl font-semibold text-gray-800 mb-4">Мои проекты</h3>
+                    <div class="overflow-x-auto relative shadow-md sm:rounded-lg">
+                        <table class="w-full text-sm text-left text-gray-500">
+                            <thead class="text-xs text-gray-700 uppercase bg-gray-50">
+                                <tr>
+                                    <th scope="col" class="py-3 px-6">Название</th>
+                                    <th scope="col" class="py-3 px-6">Статус</th>
+                                    <th scope="col" class="py-3 px-6 text-right">Действия</th>
+                                </tr>
+                            </thead>
+                            <tbody id="my-projects-list">
+                                <!-- Здесь будут мои проекты -->
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+    </div>
+</body>
+</html>
