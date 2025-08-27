@@ -53,7 +53,7 @@
         }
     </style>
     <!-- Leaflet.js для карты -->
-    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.7.1/dist/leaflet.css" xintegrity="sha512-xodx3+a7E5zQ+gL8e7h2wA3m8g2V8X3WwE8G6i0k8H2j7p2wB9d4c7F5t3D5s6s7d" crossorigin="" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.7.1/dist/leaflet.css" xintegrity="sha512-xodx3+a7E5zQ+gL8e7h2wA3m8g2V83WwE8G6i0k8H2j7p2wB9d4c7F5t3D5s6s7d" crossorigin="" />
     <script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js" xintegrity="sha512-xodx3+a7E5zQ+gL8e7h2wA3m8g2V8X3WwE8G6i0k8H2j7p2wB9d4c7F5t3D5s6s7d" crossorigin=""></script>
     <!-- Libraries to handle geojson -->
     <script src="https://unpkg.com/togeojson@0.16.0/togeojson.js"></script>
@@ -64,54 +64,54 @@
         import { getFirestore, doc, getDoc, addDoc, setDoc, updateDoc, deleteDoc, onSnapshot, collection, query } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
         import { getStorage, ref, uploadBytes, getDownloadURL, deleteObject } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-storage.js";
 
-        // Глобальные переменные для доступа к Firebase
+        // Global variables for Firebase access
         let app;
         let auth;
         let db;
         let storage;
         let userId;
         let mymap;
-        let geoJsonLayers = {}; // Хранение слоев GeoJSON для карты
-        let projects = {}; // Кэш проектов
+        let geoJsonLayers = {}; // Stores GeoJSON layers for the map
+        let projects = {}; // Project cache
 
-        // Устанавливаем пути к коллекциям и хранилищу
+        // Set paths for collections and storage
         let publicCollectionPath;
         let privateCollectionPath;
 
-        // Определяем переменные из среды, если они доступны
+        // Determine environment variables if available
         const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
         const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : { /* Your default config here if needed for local testing */ };
         const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
 
-        // Инициализация Firebase
+        // Firebase initialization
         function initializeFirebase() {
             try {
-                if (app) return; // Предотвращение повторной инициализации
+                if (app) return; // Prevent re-initialization
                 app = initializeApp(firebaseConfig);
                 auth = getAuth(app);
                 db = getFirestore(app);
                 storage = getStorage(app);
                 console.log("Firebase initialized.");
 
-                // Обработчик состояния аутентификации
+                // Authentication state handler
                 onAuthStateChanged(auth, async (user) => {
                     if (user) {
                         userId = user.uid;
                         console.log("User authenticated:", userId);
                         publicCollectionPath = `artifacts/${appId}/public/data/projects`;
                         privateCollectionPath = `artifacts/${appId}/users/${userId}/private-projects`;
-                        // Запускаем слушателей данных только после аутентификации
+                        // Start data listeners only after authentication
                         startDataListeners();
                         document.getElementById('admin-id-display').textContent = `Ваш ID: ${userId}`;
                         document.getElementById('app-id-display').textContent = `ID приложения: ${appId}`;
                     } else {
-                        // Если токена нет, входим анонимно
+                        // If no token, sign in anonymously
                         await signInAnonymously(auth);
                         console.log("Signed in anonymously.");
                     }
                 });
 
-                // Если есть токен, входим с ним
+                // If a token is available, sign in with it
                 if (initialAuthToken) {
                     signInWithCustomToken(auth, initialAuthToken).catch(error => {
                         console.error("Custom token sign-in failed:", error);
@@ -126,14 +126,14 @@
             }
         }
 
-        // Запуск слушателей данных Firestore
+        // Start Firestore data listeners
         function startDataListeners() {
             if (!userId) {
                 console.error("No user ID. Cannot start data listeners.");
                 return;
             }
 
-            // Слушаем изменения в публичной коллекции для отображения
+            // Listen for changes in the public collection for display
             const qPublic = query(collection(db, publicCollectionPath));
             onSnapshot(qPublic, (querySnapshot) => {
                 const projectsList = {};
@@ -144,10 +144,10 @@
                 renderProjects(projects);
                 renderMap(projects);
             }, (error) => {
-                console.error("Ошибка при получении публичных проектов:", error);
+                console.error("Error getting public projects:", error);
             });
 
-            // Слушаем изменения в личной коллекции админа
+            // Listen for changes in the admin's private collection
             const qPrivate = query(collection(db, privateCollectionPath));
             onSnapshot(qPrivate, (querySnapshot) => {
                 const myProjectsList = {};
@@ -156,11 +156,11 @@
                 });
                 renderMyProjectsList(myProjectsList);
             }, (error) => {
-                console.error("Ошибка при получении моих проектов:", error);
+                console.error("Error getting my projects:", error);
             });
         }
 
-        // Рендеринг списка проектов на главной странице
+        // Render project list on the main page
         function renderProjects(projects) {
             const container = document.getElementById('projects-container');
             container.innerHTML = '';
@@ -180,12 +180,12 @@
                                 ${project.links.split('\n').map(link => `<li><a href="${link.trim()}" target="_blank" class="hover:underline">${link.trim()}</a></li>`).join('')}
                             </ul>
                         </div>` : ''}
-                        ${project.media && project.media.length > 0 ? `<div class="mt-4 grid grid-cols-2 sm:grid-cols-3 gap-4">
+                        ${project.media && project.media.length > 0 ? `<div class="mt-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
                             ${project.media.map(media => {
                                 if (media.type.startsWith('image')) {
-                                    return `<img src="${media.url}" alt="${project.title}" class="rounded-lg object-cover w-full h-full">`;
+                                    return `<img src="${media.url}" alt="${project.title}" class="rounded-lg object-cover w-full h-48">`;
                                 } else if (media.type.startsWith('video')) {
-                                    return `<video controls src="${media.url}" class="rounded-lg w-full h-full"></video>`;
+                                    return `<video controls src="${media.url}" class="rounded-lg w-full h-48"></video>`;
                                 } else if (media.type.startsWith('audio')) {
                                     return `<audio controls src="${media.url}" class="w-full"></audio>`;
                                 }
@@ -199,11 +199,11 @@
             document.getElementById('loading-state').style.display = 'none';
         }
 
-        // Рендеринг карты Leaflet
+        // Render Leaflet map
         function renderMap(projects) {
-            // Очищаем старые слои
+            // Clear old layers
             for (const key in geoJsonLayers) {
-                if (mymap.hasLayer(geoJsonLayers[key])) {
+                if (mymap && mymap.hasLayer(geoJsonLayers[key])) {
                     mymap.removeLayer(geoJsonLayers[key]);
                 }
             }
@@ -211,7 +211,14 @@
 
             const mapContainer = document.getElementById('map');
             if (!mymap && mapContainer) {
-                mymap = L.map(mapContainer).setView([55.7558, 37.6176], 12); // Центр Москвы
+                // Initialize the map at a specific center and zoom level
+                // Set the initial view to your desired coordinates and zoom level
+                // Example: Moscow center with zoom level 12
+                const initialCenter = [55.82113173575258, 37.6117634423476;
+                const initialZoom = 10;
+                mymap = L.map(mapContainer).setView(initialCenter, initialZoom);
+                
+                // Add the tile layer (map background)
                 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
                     attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
                 }).addTo(mymap);
@@ -224,11 +231,11 @@
                         const geoJsonData = typeof project.geoJson === 'string' ? JSON.parse(project.geoJson) : project.geoJson;
                         const geoLayer = L.geoJSON(geoJsonData, {
                             style: function (feature) {
-                                // Пример стиля для линий и полигонов
+                                // Style for lines and polygons
                                 return { color: '#ef4444', weight: 3, opacity: 0.65 };
                             },
                             pointToLayer: function (feature, latlng) {
-                                // Кастомный маркер для точек
+                                // Custom marker for points
                                 return L.circleMarker(latlng, {
                                     radius: 8,
                                     fillColor: "#ef4444",
@@ -239,7 +246,7 @@
                                 });
                             },
                             onEachFeature: function (feature, layer) {
-                                // Добавляем всплывающее окно
+                                // Add a popup on click
                                 layer.bindPopup(`
                                     <div class="p-2">
                                         <h4 class="font-bold text-lg">${project.title || 'Без названия'}</h4>
@@ -250,13 +257,13 @@
                         }).addTo(mymap);
                         geoJsonLayers[project.id] = geoLayer;
                     } catch (e) {
-                        console.error("Ошибка при парсинге GeoJSON для проекта:", project.id, e);
+                        console.error("Error parsing GeoJSON for project:", project.id, e);
                     }
                 }
             });
         }
 
-        // Рендеринг списка проектов в админке
+        // Render the list of projects in the admin panel
         function renderMyProjectsList(myProjects) {
             const container = document.getElementById('my-projects-list');
             container.innerHTML = '';
@@ -281,7 +288,7 @@
             });
         }
 
-        // Заполнение формы для редактирования проекта
+        // Populate the form for editing a project
         async function editProject(projectId) {
             showSection('admin-section');
             document.getElementById('admin-title').textContent = 'Изменить проект';
@@ -297,43 +304,43 @@
                     document.getElementById('project-public').checked = data.public || false;
                 }
             } catch (e) {
-                console.error("Ошибка при получении проекта:", e);
+                console.error("Error getting project:", e);
                 showInfoMessage("Ошибка при загрузке проекта. Пожалуйста, попробуйте снова.", "error");
             }
         }
 
-        // Удаление проекта
+        // Delete a project
         async function deleteProject(projectId) {
             const docRefPrivate = doc(db, privateCollectionPath, projectId);
             const docRefPublic = doc(db, publicCollectionPath, projectId);
 
-            // Ищем проект в публичной коллекции, чтобы удалить оттуда медиа
+            // Find project in public collection to delete media
             const docSnap = await getDoc(docRefPublic);
             if (docSnap.exists() && docSnap.data().media) {
                 const mediaFiles = docSnap.data().media;
-                // Удаляем медиафайлы из Firebase Storage
+                // Delete media files from Firebase Storage
                 for (const media of mediaFiles) {
                     try {
                         const fileRef = ref(storage, media.url);
                         await deleteObject(fileRef);
-                        console.log(`Успешно удален файл: ${media.url}`);
+                        console.log(`Successfully deleted file: ${media.url}`);
                     } catch (e) {
-                        console.error(`Ошибка при удалении файла ${media.url}:`, e);
+                        console.error(`Error deleting file ${media.url}:`, e);
                     }
                 }
             }
-            // Удаляем проект из обеих коллекций
+            // Delete the project from both collections
             try {
                 await deleteDoc(docRefPrivate);
                 await deleteDoc(docRefPublic);
                 showInfoMessage("Проект успешно удален.");
             } catch (e) {
-                console.error("Ошибка при удалении проекта:", e);
+                console.error("Error deleting project:", e);
                 showInfoMessage("Ошибка при удалении проекта. Пожалуйста, попробуйте снова.", "error");
             }
         }
 
-        // Сохранение/обновление проекта
+        // Save/update project
         async function saveProject(event) {
             event.preventDefault();
             const form = event.target;
@@ -358,15 +365,15 @@
             let uploadedMedia = [];
 
             try {
-                // Обработка GeoJSON файла
+                // Handle GeoJSON file
                 if (geoJsonFile) {
                     const fileText = await geoJsonFile.text();
-                    // Проверяем, что файл действительно GeoJSON
+                    // Check that the file is indeed GeoJSON
                     JSON.parse(fileText);
                     geoJsonContent = fileText;
                 }
 
-                // Загрузка медиафайлов в Firebase Storage
+                // Upload media files to Firebase Storage
                 for (const file of mediaFiles) {
                     const storageRef = ref(storage, `${appId}/media/${crypto.randomUUID()}-${file.name}`);
                     const uploadTask = await uploadBytes(storageRef, file);
@@ -385,23 +392,23 @@
 
                 const isNewProject = !projectId;
                 if (isNewProject) {
-                    // Создание нового проекта
+                    // Create a new project
                     const privateDocRef = await addDoc(collection(db, privateCollectionPath), projectData);
-                    // Копируем в публичную коллекцию, если он публичный
+                    // Copy to public collection if public
                     if (isPublic) {
                         await setDoc(doc(db, publicCollectionPath, privateDocRef.id), projectData);
                     }
                     showInfoMessage("Проект успешно создан!");
                 } else {
-                    // Обновление существующего проекта
+                    // Update an existing project
                     const privateDocRef = doc(db, privateCollectionPath, projectId);
                     await updateDoc(privateDocRef, projectData);
-                    // Обновляем публичную версию
+                    // Update the public version
                     if (isPublic) {
                         const publicDocRef = doc(db, publicCollectionPath, projectId);
                         await setDoc(publicDocRef, projectData, { merge: true });
                     } else {
-                        // Если сняли галочку "Опубликовать", удаляем из публичной
+                        // If "Publish" is unchecked, delete from public
                         await deleteDoc(doc(db, publicCollectionPath, projectId));
                     }
                     showInfoMessage("Проект успешно обновлен!");
@@ -411,7 +418,7 @@
                 document.getElementById('project-id').value = '';
                 document.getElementById('admin-title').textContent = 'Добавить новый проект';
             } catch (e) {
-                console.error("Ошибка при сохранении проекта:", e);
+                console.error("Error saving project:", e);
                 showInfoMessage(`Ошибка при сохранении: ${e.message}`, "error");
             } finally {
                 document.getElementById('save-btn').disabled = false;
@@ -419,7 +426,7 @@
             }
         }
 
-        // Управление отображением разделов
+        // Control section visibility
         function showSection(sectionId) {
             document.getElementById('main-section').classList.add('hidden');
             document.getElementById('admin-section').classList.add('hidden');
@@ -431,7 +438,7 @@
             }
         }
 
-        // Управление всплывающими сообщениями
+        // Control floating messages
         function showInfoMessage(message, type = "success") {
             const messageBox = document.getElementById('info-message-box');
             messageBox.textContent = message;
@@ -446,12 +453,12 @@
             }, 5000);
         }
 
-        // Инициализация при загрузке страницы
+        // Initialize on page load
         window.onload = function() {
             initializeFirebase();
             showSection('main-section');
 
-            // Навешиваем слушатели событий
+            // Attach event listeners
             document.getElementById('admin-toggle-btn').addEventListener('click', () => showSection('admin-section'));
             document.getElementById('main-toggle-btn').addEventListener('click', () => showSection('main-section'));
             document.getElementById('project-form').addEventListener('submit', saveProject);
